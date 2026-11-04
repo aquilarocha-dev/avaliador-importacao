@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#d9561f">
+<title>Avaliador de Importação ML</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+/* Layout: coluna única tipo "ficha de inspeção" de feira — conta, busca, calculadora, resultado com dois cenários, ficha do fornecedor, lista salva no Supabase */
+:root{
+  color-scheme:light;
+  --bg:#eef1f4; --surface:#ffffff; --ink:#16202b; --muted:#5b6876; --line:#d5dbe2;
+  --accent:#d9561f; --accent-ink:#ffffff; --soft:#f6f8fa;
+  --good:#1d7a4a; --good-bg:#e3f3ea; --warn:#9a6a00; --warn-bg:#fbf1d6; --bad:#b4282b; --bad-bg:#fbe5e5;
+  --f-display:"Barlow Condensed","Arial Narrow",sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f151b; --surface:#18212a; --ink:#e7ecf1; --muted:#97a4b2; --line:#2b3743;
+  --accent:#f07a42; --accent-ink:#1a0d06; --soft:#1e2832;
+  --good:#5fd197; --good-bg:#14301f; --warn:#f0c35a; --warn-bg:#33290e; --bad:#ff7d7f; --bad-bg:#3a1719; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151b; --surface:#18212a; --ink:#e7ecf1; --muted:#97a4b2; --line:#2b3743;
+  --accent:#f07a42; --accent-ink:#1a0d06; --soft:#1e2832;
+  --good:#5fd197; --good-bg:#14301f; --warn:#f0c35a; --warn-bg:#33290e; --bad:#ff7d7f; --bad-bg:#3a1719; color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+img{max-width:100%}
+[hidden]{display:none!important}
+.wrap{max-width:760px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+header h1{font-family:var(--f-display);font-weight:700;font-size:2rem;letter-spacing:.01em;margin:0;line-height:1;text-wrap:balance}
+header p{margin:6px 0 0;color:var(--muted);font-size:.9rem}
+.who{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted)}
+.who button{padding:6px 10px;font-size:.8rem}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.label{font-family:var(--f-display);font-weight:600;text-transform:uppercase;letter-spacing:.08em;font-size:.85rem;color:var(--muted);margin:0}
+.row{display:flex;gap:8px}
+.row input{flex:1;min-width:0}
+input{font:inherit;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:7px;padding:10px 11px;width:100%}
+input:focus-visible,button:focus-visible,a:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+button{font:inherit;font-weight:600;border-radius:7px;padding:10px 14px;border:1px solid var(--line);background:var(--soft);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.55;cursor:default}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field.full{grid-column:1/-1}
+.field label{font-size:.8rem;color:var(--muted);font-weight:500}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.btns button{flex:1}
+.hint{font-size:.78rem;color:var(--muted);margin:0}
+.status{font-size:.88rem;color:var(--muted)}
+.status.err,.err{color:var(--bad)}
+.ok{font-size:.85rem;color:var(--good);margin:0}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:var(--soft);border-radius:7px;padding:8px 10px}
+.stat b{display:block;font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-size:1rem}
+.stat span{font-size:.75rem;color:var(--muted)}
+.list{display:flex;flex-direction:column;border-top:1px solid var(--line);max-height:460px;overflow:auto}
+.item{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:4px 10px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer;align-items:start}
+.item:hover{background:var(--soft)}
+.item.sel{background:var(--soft);box-shadow:inset 3px 0 0 var(--accent)}
+.item .t{font-size:.9rem;font-weight:500;overflow-wrap:anywhere}
+.item .p{font-family:var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.item .m{grid-column:2/-1;font-size:.78rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
+.item a,.listing a{color:var(--accent)}
+.thumb{width:56px;height:56px;border-radius:6px;background:var(--soft);border:1px solid var(--line);overflow:hidden;display:flex;align-items:center;justify-content:center;grid-row:span 2}
+.thumb img{width:100%;height:100%;object-fit:contain;background:#fff}
+.thumb .ph{font-size:.62rem;color:var(--muted);text-align:center;line-height:1.15;padding:2px}
+.listing{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px;align-items:start}
+.listing .thumb{width:120px;height:120px;grid-row:auto}
+.listing .info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.listing .info b{overflow-wrap:anywhere;font-weight:600}
+.listing .info span{font-size:.82rem;color:var(--muted)}
+.verdict{border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:4px}
+.verdict.good{background:var(--good-bg);color:var(--good)}
+.verdict.warn{background:var(--warn-bg);color:var(--warn)}
+.verdict.bad{background:var(--bad-bg);color:var(--bad)}
+.verdict h2{font-family:var(--f-display);font-size:1.7rem;margin:0;line-height:1}
+.verdict p{margin:0;font-size:.9rem}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-family:var(--f-display);font-weight:600;text-transform:uppercase;letter-spacing:.06em;font-size:.8rem;color:var(--muted);text-align:right;padding:6px 0 6px 10px;border-bottom:2px solid var(--line)}
+th:first-child{text-align:left;padding-left:0}
+th small{display:block;font-family:var(--f-mono);text-transform:none;letter-spacing:0;font-weight:500}
+td{padding:7px 0 7px 10px;border-bottom:1px solid var(--line);font-size:.92rem;text-align:right;font-family:var(--f-mono);white-space:nowrap}
+td:first-child{text-align:left;padding-left:0;font-family:var(--f-body);white-space:normal}
+tr.total td{font-weight:600;border-bottom:none;border-top:2px solid var(--ink)}
+tr.neg td:not(:first-child){color:var(--bad)}
+td.good{color:var(--good)} td.bad{color:var(--bad)}
+.kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.kpi{border:1px solid var(--line);border-radius:7px;padding:8px 10px}
+.kpi b{display:block;font-family:var(--f-mono);font-size:1.05rem;font-variant-numeric:tabular-nums}
+.kpi span{font-size:.75rem;color:var(--muted)}
+.saved{display:flex;flex-direction:column}
+.sv{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.sv .thumb{grid-row:auto}
+.sv .body{min-width:0;display:flex;flex-direction:column;gap:3px}
+.sv .name{display:flex;align-items:center;gap:8px;font-weight:600;overflow-wrap:anywhere}
+.sv .meta{font-size:.8rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 12px}
+.sv .contact{font-family:var(--f-mono);font-size:.8rem;user-select:all;overflow-wrap:anywhere}
+.sv .side{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.sv .pend{font-size:.72rem;color:var(--warn)}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+.dot.good{background:var(--good)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.sv .x{border:none;background:none;color:var(--muted);padding:4px 6px}
+.sv .mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+@media (max-width:440px){.stats,.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.ficha,.grid.login{grid-template-columns:minmax(0,1fr)}.listing{grid-template-columns:88px minmax(0,1fr)}.listing .thumb{width:88px;height:88px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Avaliador de Importação ML</h1>
+      <p>Busque o produto no Mercado Livre, informe o preço do fornecedor e veja se a importação compensa nos cenários otimista e pessimista.</p>
+    </div>
+    <div class="who" id="who" hidden><span id="who-email"></span><button type="button" id="b-sair">Sair</button></div>
+  </header>
+
+  <section class="panel" id="p-login" aria-labelledby="l-login" hidden>
+    <p class="label" id="l-login">Entrar</p>
+    <p class="hint">Entre para salvar as avaliações na nuvem e ver a mesma lista no celular e no computador. A calculadora funciona sem login.</p>
+    <form class="grid login" id="f-login" autocomplete="on">
+      <div class="field"><label for="email">E-mail</label><input id="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="senha">Senha</label><input id="senha" type="password" autocomplete="current-password" minlength="6" required></div>
+      <div class="field full btns">
+        <button class="primary" type="submit" id="b-entrar">Entrar</button>
+        <button type="button" id="b-criar">Criar conta</button>
+      </div>
+    </form>
+    <p class="status" id="login-st"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="l-busca">
+    <p class="label" id="l-busca">1 · Produto no Mercado Livre</p>
+    <form class="row" id="f-busca">
+      <input id="q" type="search" placeholder="Ex.: garrafa térmica infantil" autocomplete="off" aria-label="Nome do produto">
+      <button class="primary" id="b-busca" type="submit">Buscar</button>
+    </form>
+    <div class="status" id="st">Busca os 20 produtos com mais faturamento no último mês que tenham essas palavras no título. A busca usa o JoomPulse e só funciona com a página aberta dentro do Claude; fora dele, informe o preço de venda manualmente.</div>
+    <div class="stats" id="stats" hidden></div>
+    <div class="list" id="list" hidden></div>
+  </section>
+
+  <section class="panel" aria-labelledby="l-custos">
+    <p class="label" id="l-custos">2 · Custos e venda</p>
+    <div class="grid">
+      <div class="field"><label for="usd">Preço do produto (US$/un.)</label><input class="num" id="usd" type="number" step="0.01" min="0" inputmode="decimal" value="3.20"></div>
+      <div class="field"><label for="fx">Câmbio (R$ por US$)</label><input class="num" id="fx" type="number" step="0.01" min="0" inputmode="decimal" value="5.40"></div>
+      <div class="field"><label for="sale">Preço de venda no ML (R$)</label><input class="num" id="sale" type="number" step="0.01" min="0" inputmode="decimal" value="59.90"></div>
+      <div class="field"><label for="tax">Imposto sobre a venda (%)</label><input class="num" id="tax" type="number" step="0.1" min="0" inputmode="decimal" value="11"></div>
+      <div class="field"><label for="com">Comissão marketplace (%)</label><input class="num" id="com" type="number" step="0.1" min="0" inputmode="decimal" value="25"></div>
+      <div class="field"><label for="tgt">Margem mínima desejada (%)</label><input class="num" id="tgt" type="number" step="1" min="0" inputmode="decimal" value="20"></div>
+      <div class="field"><label for="mo">Fator importação otimista (×)</label><input class="num" id="mo" type="number" step="0.05" min="1" inputmode="decimal" value="1.8"></div>
+      <div class="field"><label for="mp">Fator importação pessimista (×)</label><input class="num" id="mp" type="number" step="0.05" min="1" inputmode="decimal" value="2.2"></div>
+      <div class="field"><label for="oth">Custos extras (R$/un.)</label><input class="num" id="oth" type="number" step="0.01" min="0" inputmode="decimal" value="0"></div>
+    </div>
+    <p class="hint">Custo de importação = preço em US$ × câmbio × fator. O fator já cobre impostos de importação, frete, despachante e porto. Use "custos extras" para o que ficar fora, como embalagem ou certificação. O câmbio e os percentuais ficam lembrados neste aparelho.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="l-res">
+    <p class="label" id="l-res">3 · Resultado por unidade</p>
+    <div class="listing" id="listing" hidden></div>
+    <div class="verdict" id="verdict"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Item</th><th>Otimista<small id="h-o">1,8×</small></th><th>Pessimista<small id="h-p">2,2×</small></th></tr></thead>
+      <tbody id="tb"></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="l-ficha">
+    <p class="label" id="l-ficha">4 · Fornecedor</p>
+    <form class="grid ficha" id="f-ficha" autocomplete="off">
+      <div class="field full"><label for="nome">Nome do produto</label><input id="nome" type="text" placeholder="Ex.: Garrafa térmica 350 ml"></div>
+      <div class="field"><label for="forn">Fornecedor</label><input id="forn" type="text" placeholder="Ex.: Ningbo Kids Co."></div>
+      <div class="field"><label for="estande">Estande</label><input id="estande" type="text" placeholder="Ex.: Pavilhão B, 214"></div>
+      <div class="field full"><label for="contato">Contato</label><input id="contato" type="text" placeholder="Nome, WhatsApp, e-mail ou WeChat"></div>
+      <div class="field full"><button class="primary" id="b-save" type="submit">Salvar avaliação</button></div>
+    </form>
+    <p class="ok" id="saved-msg" hidden></p>
+  </section>
+
+  <section class="panel" aria-labelledby="l-salvos">
+    <p class="label" id="l-salvos">Avaliados na feira</p>
+    <p class="status" id="sync-st" hidden></p>
+    <div class="saved" id="saved"></div>
+  </section>
+</div>
+
+<script>
+// ---------- configuração Supabase (projeto Seller.a) ----------
+const SUPABASE_URL="https://vjsankpiurlhgsymtboq.supabase.co";
+const SUPABASE_KEY="sb_publishable_Q5z3dOYiP2A9BIs8rJIWSQ_jxQ7D1yE";
+const TABLE="importacao_avaliacoes";
+const sb=window.supabase?window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true}}):null;
+
+const $=id=>document.getElementById(id);
+const brl=v=>isFinite(v)?Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}):"—";
+const usd=v=>isFinite(v)?"US$ "+Number(v).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}):"—";
+const pct=v=>(v!=null&&isFinite(v))?(v*100).toLocaleString("pt-BR",{maximumFractionDigits:1})+"%":"—";
+const fac=v=>v.toLocaleString("pt-BR",{maximumFractionDigits:2})+"×";
+const int=v=>v==null?"—":Math.round(v).toLocaleString("pt-BR");
+const num=id=>{const v=parseFloat($(id).value);return isFinite(v)?v:0};
+const fin=v=>(v!=null&&isFinite(v))?v:null;
+const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const uuid=()=>(crypto.randomUUID?crypto.randomUUID():"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==="x"?r:(r&3|8)).toString(16)}));
+const PARAMS=["fx","tax","com","tgt","oth","mo","mp"];
+
+let market=null;
+let selected=null; // anúncio escolhido: {title, imageUrl, meliUrl, priceMin, sales1m, sellerCount}
+let lastCalc=null;
+let session=null;
+let remote=[]; // avaliações vindas do Supabase
+
+PARAMS.forEach(id=>{const v=store.get("p_"+id,null);if(v!=null)$(id).value=v;});
+
+// foto do anúncio com alternativa quando a imagem não carrega
+function thumb(url,link,cls){
+  const box=document.createElement("div");box.className="thumb"+(cls?" "+cls:"");
+  const fallback=()=>{box.innerHTML="";
+    const s=document.createElement(link?"a":"span");s.className="ph";s.textContent=link?"foto no ML ↗":"sem foto";
+    if(link){s.href=link;s.target="_blank";s.rel="noopener";s.style.color="var(--accent)";s.addEventListener("click",e=>e.stopPropagation());}
+    box.appendChild(s);};
+  if(url){const img=document.createElement("img");img.alt="Foto do anúncio";img.loading="lazy";img.referrerPolicy="no-referrer";img.src=url;img.addEventListener("error",fallback);box.appendChild(img);}
+  else fallback();
+  return box;
+}
+
+function scenario(p,mult){
+  const imp=p.usd*p.fx*mult+p.oth;
+  const comm=p.sale*p.com, tax=p.sale*p.tax;
+  const profit=p.sale-comm-tax-imp;
+  const margin=p.sale>0?profit/p.sale:NaN;
+  const keep=1-p.com-p.tax;
+  return {
+    mult,imp,comm,tax,profit,margin,
+    roi:imp>0?profit/imp:NaN,
+    be:keep>0?imp/keep:NaN,
+    minSale:(keep-p.tgt)>0?imp/(keep-p.tgt):NaN,
+    maxUsd:(p.fx>0&&mult>0)?(p.sale*(keep-p.tgt)-p.oth)/(p.fx*mult):NaN
+  };
+}
+function calc(){
+  const p={usd:num("usd"),fx:num("fx"),sale:num("sale"),tax:num("tax")/100,com:num("com")/100,tgt:num("tgt")/100,oth:num("oth"),mo:num("mo"),mp:num("mp")};
+  return {p,o:scenario(p,p.mo),pe:scenario(p,p.mp)};
+}
+function classOf(r){
+  const t=r.p.tgt;
+  if(r.pe.margin>=t)return "good";
+  if(r.o.margin>=t||r.pe.margin>=t/2)return "warn";
+  return "bad";
+}
+
+function renderListing(){
+  const box=$("listing");
+  if(!selected){box.hidden=true;box.innerHTML="";return;}
+  box.hidden=false;box.innerHTML="";
+  box.appendChild(thumb(selected.imageUrl,selected.meliUrl));
+  const info=document.createElement("div");info.className="info";
+  const b=document.createElement("b");b.textContent=selected.title||"Anúncio sem título";
+  const s1=document.createElement("span");s1.textContent=`${brl(selected.priceMin)} · ${int(selected.sales1m)} vendas/mês · ${selected.sellerCount==null?"—":selected.sellerCount} vendedores`;
+  info.append(b,s1);
+  if(selected.meliUrl){const a=document.createElement("a");a.href=selected.meliUrl;a.target="_blank";a.rel="noopener";a.textContent="Abrir anúncio no Mercado Livre";info.appendChild(a);}
+  box.appendChild(info);
+}
+
+function render(){
+  const r=calc(); lastCalc=r; const p=r.p, o=r.o, pe=r.pe;
+  $("h-o").textContent=fac(p.mo); $("h-p").textContent=fac(p.mp);
+  let cls,title,why;
+  if(!(p.sale>0)||!(p.fx>0)||!(p.usd>0)){cls="warn";title="Preencha os valores";why="Informe preço em dólar, câmbio e preço de venda.";}
+  else{
+    cls=classOf(r);
+    if(cls==="good"){title="Boa opção";why=`Mesmo no cenário pessimista a margem é de ${pct(pe.margin)}, acima dos ${pct(p.tgt)} desejados.`;}
+    else if(cls==="warn"){title="Avaliar com cuidado";why=`Margem de ${pct(o.margin)} no otimista e ${pct(pe.margin)} no pessimista. Para garantir ${pct(p.tgt)} no pessimista, pague até ${usd(Math.max(0,pe.maxUsd))} por unidade.`;}
+    else{title="Não compensa";why=o.profit<0?`Prejuízo de ${brl(-o.profit)} por unidade mesmo no cenário otimista.`:`Margem de só ${pct(o.margin)} no otimista e ${pct(pe.margin)} no pessimista.`;}
+    if(market&&cls!=="bad"&&market.salesRef!=null&&market.salesRef<30) why+=" Atenção: pouca demanda no ML para esse produto.";
+    if(market&&cls!=="bad"&&market.sellersRef!=null&&market.sellersRef>40) why+=" Muitos vendedores disputando o mesmo produto.";
+  }
+  $("verdict").className="verdict "+cls;
+  $("verdict").innerHTML=`<h2>${title}</h2><p>${why}</p>`;
+  $("kpis").innerHTML=
+    `<div class="kpi"><b>${pct(o.margin)} / ${pct(pe.margin)}</b><span>Margem otimista / pessimista</span></div>`+
+    `<div class="kpi"><b>${usd(Math.max(0,pe.maxUsd))}</b><span>Preço máx. p/ ${pct(p.tgt)} (pessimista)</span></div>`+
+    `<div class="kpi"><b>${brl(pe.minSale)}</b><span>Venda mín. p/ ${pct(p.tgt)} (pessimista)</span></div>`;
+  const pc=v=>`<td class="${v>=0?"good":"bad"}">${brl(v)}</td>`;
+  $("tb").innerHTML=
+    `<tr><td>Preço de venda</td><td>${brl(p.sale)}</td><td>${brl(p.sale)}</td></tr>`+
+    `<tr class="neg"><td>Comissão (${pct(p.com)})</td><td>− ${brl(o.comm)}</td><td>− ${brl(pe.comm)}</td></tr>`+
+    `<tr class="neg"><td>Imposto sobre venda (${pct(p.tax)})</td><td>− ${brl(o.tax)}</td><td>− ${brl(pe.tax)}</td></tr>`+
+    `<tr class="neg"><td>Custo de importação (${usd(p.usd)} × ${p.fx.toLocaleString("pt-BR")} × fator${p.oth?" + extras":""})</td><td>− ${brl(o.imp)}</td><td>− ${brl(pe.imp)}</td></tr>`+
+    `<tr class="total"><td>Lucro por unidade</td>${pc(o.profit)}${pc(pe.profit)}</tr>`+
+    `<tr><td>Margem sobre a venda</td><td>${pct(o.margin)}</td><td>${pct(pe.margin)}</td></tr>`+
+    `<tr><td>Retorno sobre o custo</td><td>${pct(o.roi)}</td><td>${pct(pe.roi)}</td></tr>`+
+    `<tr><td>Venda no ponto de equilíbrio</td><td>${brl(o.be)}</td><td>${brl(pe.be)}</td></tr>`+
+    `<tr><td>Preço máximo para ${pct(p.tgt)} de margem</td><td>${usd(Math.max(0,o.maxUsd))}</td><td>${usd(Math.max(0,pe.maxUsd))}</td></tr>`;
+  PARAMS.forEach(id=>store.set("p_"+id,$(id).value));
+}
+document.querySelectorAll("input.num").forEach(i=>i.addEventListener("input",render));
+
+// ---------- busca via JoomPulse (só dentro do Claude) ----------
+let mcp=null;
+const mcpReady=(async()=>{try{mcp=window.claude?await window.claude.use("mcp"):null}catch(e){mcp=null}return mcp})();
+
+function errMsg(e){
+  switch(e&&e.code){
+    case "server_not_connected":return "O conector JoomPulse não está conectado. Adicione-o em claude.ai → Configurações → Conectores.";
+    case "needs_reauth":return "A conexão do JoomPulse expirou. Reconecte em claude.ai → Configurações → Conectores.";
+    case "not_in_manifest":case "approval_required":return "A página precisa da sua permissão para usar o JoomPulse. Toque em Buscar de novo e autorize.";
+    case "server_unavailable":return "O JoomPulse não respondeu agora. Tente de novo em alguns segundos.";
+    case "tool_error":return "A busca foi recusada: "+(e.message||"").slice(0,160);
+    default:return "Não foi possível buscar agora ("+((e&&e.code)||"erro")+"). A calculadora continua funcionando.";
+  }
+}
+
+$("f-busca").addEventListener("submit",async ev=>{
+  ev.preventDefault();
+  const q=$("q").value.trim(); if(!q)return;
+  $("b-busca").disabled=true; $("st").className="status"; $("st").textContent="Buscando no Mercado Livre…";
+  await mcpReady;
+  if(!mcp){
+    $("st").className="status err";
+    $("st").textContent="A busca no Mercado Livre só funciona com a página aberta no Claude com o JoomPulse conectado. Aqui, preencha o preço de venda manualmente — o resto funciona normalmente.";
+    if(!$("nome").value)$("nome").value=q;
+    $("b-busca").disabled=false;return;
+  }
+  try{
+    const res=await mcp.callTool("JoomPulse","meli_search_products",{country:"BR",queries:[q],group:"product",sort_by:"revenue1m",limit:20,preset:"full_info"},{cache:{staleTime:600000,gcTime:3600000}});
+    const pl=res.payload||{};
+    const cols=pl.columns||[], data=pl.data||[];
+    const rows=data.map(d=>Object.fromEntries(cols.map((c,i)=>[c,d[i]])));
+    showResults(q,rows);
+  }catch(e){$("st").className="status err";$("st").textContent=errMsg(e);}
+  $("b-busca").disabled=false;
+});
+
+function median(a){if(!a.length)return null;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2}
+
+function pickRow(r,el){
+  $("list").querySelectorAll(".item").forEach(x=>x.classList.remove("sel"));
+  if(el)el.classList.add("sel");
+  selected={title:r.title,imageUrl:r.imageUrl,meliUrl:r.meliUrl,priceMin:r.priceMin,sales1m:r.sales1m,sellerCount:r.sellerCount};
+  if(r.priceMin>0)$("sale").value=r.priceMin.toFixed(2);
+  if(market){market.salesRef=r.sales1m;market.sellersRef=r.sellerCount;}
+  if(!$("nome").value)$("nome").value=(r.title||"").slice(0,60);
+  renderListing(); render();
+}
+
+function showResults(q,rows){
+  if(!rows.length){$("st").textContent="Nenhum produto ativo com essas palavras. Tente termos mais curtos.";$("list").hidden=true;$("stats").hidden=true;market=null;selected=null;renderListing();render();return;}
+  const sold=rows.filter(r=>(r.sales1m||0)>0);
+  const top=sold.slice(0,5);
+  const refPrice=median(top.map(r=>r.priceMin).filter(v=>v>0));
+  const totSales=rows.reduce((a,r)=>a+(r.sales1m||0),0);
+  const totRev=rows.reduce((a,r)=>a+(r.revenue1m||0),0);
+  market={q,salesRef:top.length?median(top.map(r=>r.sales1m)):0,sellersRef:median(rows.map(r=>r.sellerCount).filter(v=>v!=null))};
+  $("st").textContent=`${rows.length} produtos para “${q}”, ordenados por faturamento mensal. Toque em um para usar o preço e a foto dele.`;
+  $("stats").hidden=false;
+  $("stats").innerHTML=
+    `<div class="stat"><b>${refPrice?brl(refPrice):"—"}</b><span>Preço mediano (top 5)</span></div>`+
+    `<div class="stat"><b>${int(totSales)}</b><span>Vendas/mês (top 20)</span></div>`+
+    `<div class="stat"><b>${brl(totRev)}</b><span>Faturamento/mês</span></div>`;
+  const list=$("list"); list.hidden=false; list.innerHTML="";
+  rows.forEach(r=>{
+    const el=document.createElement("div"); el.className="item"; el.tabIndex=0; el.setAttribute("role","button");
+    const t=document.createElement("div");t.className="t";t.textContent=r.title||"(sem título)";
+    const pr=document.createElement("div");pr.className="p";pr.textContent=r.priceMin===r.priceMax?brl(r.priceMin):brl(r.priceMin)+" – "+brl(r.priceMax);
+    const m=document.createElement("div");m.className="m";
+    m.innerHTML=`<span>${int(r.sales1m)} vendas/mês</span><span>${brl(r.revenue1m)}/mês</span><span>${r.sellerCount==null?"—":r.sellerCount} vendedores</span>`;
+    if(r.meliUrl){const a=document.createElement("a");a.href=r.meliUrl;a.target="_blank";a.rel="noopener";a.textContent="ver no ML";a.addEventListener("click",e=>e.stopPropagation());m.appendChild(a);}
+    el.append(thumb(r.imageUrl,r.meliUrl),t,pr,m);
+    const pick=()=>pickRow(r,el);
+    el.addEventListener("click",pick); el.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();pick();}});
+    list.appendChild(el);
+  });
+  // mostra o anúncio líder como referência, mantendo o preço mediano
+  const lead=top[0]||rows[0];
+  selected={title:lead.title,imageUrl:lead.imageUrl,meliUrl:lead.meliUrl,priceMin:lead.priceMin,sales1m:lead.sales1m,sellerCount:lead.sellerCount};
+  if(refPrice)$("sale").value=refPrice.toFixed(2);
+  if(!$("nome").value)$("nome").value=q;
+  renderListing(); render();
+}
+
+// ---------- login ----------
+function setLoginMsg(t,err){$("login-st").textContent=t||"";$("login-st").className="status"+(err?" err":"");}
+function authErr(e){
+  const m=(e&&e.message)||"";
+  if(/Invalid login/i.test(m))return "E-mail ou senha incorretos.";
+  if(/Email not confirmed/i.test(m))return "Confirme seu e-mail pelo link que enviamos antes de entrar.";
+  if(/already registered/i.test(m))return "Esse e-mail já tem conta. Use Entrar.";
+  if(/Password should be/i.test(m))return "A senha precisa ter pelo menos 6 caracteres.";
+  return m||"Não foi possível entrar agora.";
+}
+$("f-login").addEventListener("submit",async ev=>{
+  ev.preventDefault(); if(!sb)return;
+  $("b-entrar").disabled=true; setLoginMsg("Entrando…");
+  const {error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("senha").value});
+  $("b-entrar").disabled=false;
+  if(error)setLoginMsg(authErr(error),true); else setLoginMsg("");
+});
+$("b-criar").addEventListener("click",async()=>{
+  if(!sb)return;
+  const email=$("email").value.trim(), password=$("senha").value;
+  if(!email||password.length<6){setLoginMsg("Informe e-mail e uma senha de pelo menos 6 caracteres.",true);return;}
+  $("b-criar").disabled=true; setLoginMsg("Criando conta…");
+  const {data,error}=await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin+location.pathname}});
+  $("b-criar").disabled=false;
+  if(error){setLoginMsg(authErr(error),true);return;}
+  if(!data.session)setLoginMsg("Conta criada. Abra o e-mail de confirmação e clique no link; depois volte aqui e toque em Entrar.");
+});
+$("b-sair").addEventListener("click",async()=>{if(sb)await sb.auth.signOut();});
+
+function applySession(s){
+  session=s;
+  $("p-login").hidden=!!s;
+  $("who").hidden=!s;
+  $("who-email").textContent=s?s.user.email:"";
+  if(s){flushPending().then(loadRemote);} else {remote=[];renderSaved();}
+}
+
+// ---------- avaliações: Supabase + fila offline ----------
+function pending(){return store.get("pendentes",[]);}
+function setPending(a){store.set("pendentes",a);}
+function syncMsg(t,err){const el=$("sync-st");el.hidden=!t;el.textContent=t||"";el.className="status"+(err?" err":"");}
+
+async function loadRemote(){
+  if(!sb||!session)return;
+  const {data,error}=await sb.from(TABLE).select("*").order("created_at",{ascending:false});
+  if(error){syncMsg("Não foi possível carregar a lista agora. Mostrando o que está neste aparelho.",true);}
+  else{remote=data||[];syncMsg("");}
+  renderSaved();
+}
+
+async function flushPending(){
+  if(!sb||!session)return;
+  const items=pending(); if(!items.length)return;
+  const rows=items.map(r=>{const c={...r};delete c.user_id;return c;});
+  const {error}=await sb.from(TABLE).upsert(rows,{onConflict:"id"});
+  if(!error){setPending([]);}
+  else syncMsg(`${items.length} avaliação(ões) aguardando envio — vão subir quando a internet voltar.`,true);
+}
+window.addEventListener("online",()=>{flushPending().then(loadRemote);});
+
+function renderSaved(){
+  const pend=pending();
+  const pendIds=new Set(pend.map(p=>p.id));
+  const items=[...pend.map(p=>({...p,_pend:true})),...remote.filter(r=>!pendIds.has(r.id))];
+  const box=$("saved"); box.innerHTML="";
+  if(!items.length){
+    box.innerHTML=session
+      ?'<p class="hint">Nada salvo ainda. Preencha a ficha do fornecedor e toque em Salvar avaliação para comparar tudo no fim da visita.</p>'
+      :'<p class="hint">Entre na sua conta para ver e salvar as avaliações na nuvem.</p>';
+    return;
+  }
+  items.forEach(s=>{
+    const row=document.createElement("div");row.className="sv";
+    row.appendChild(thumb(s.imagem_url,s.anuncio_url));
+    const body=document.createElement("div");body.className="body";
+    const nm=document.createElement("div");nm.className="name";
+    const d=document.createElement("span");d.className="dot "+(s.classificacao||"warn");
+    const nt=document.createElement("span");nt.textContent=s.nome;
+    nm.append(d,nt);
+    const meta=document.createElement("div");meta.className="meta";
+    const add=txt=>{if(!txt)return;const sp=document.createElement("span");sp.textContent=txt;meta.appendChild(sp);};
+    add(s.fornecedor?"Fornecedor: "+s.fornecedor:"");
+    add(s.estande?"Estande: "+s.estande:"");
+    add(`${usd(s.preco_usd)} → venda ${brl(s.preco_venda)} · lucro ${brl(s.lucro_otimista)} a ${brl(s.lucro_pessimista)}`);
+    body.append(nm,meta);
+    if(s.contato){const c=document.createElement("div");c.className="contact";c.textContent=s.contato;body.appendChild(c);}
+    if(s.anuncio_url){const a=document.createElement("a");a.href=s.anuncio_url;a.target="_blank";a.rel="noopener";a.textContent="anúncio de referência";a.style.color="var(--accent)";a.style.fontSize=".8rem";body.appendChild(a);}
+    const side=document.createElement("div");side.className="side";
+    const m=document.createElement("span");m.className="mono";
+    m.textContent=`${pct(s.margem_otimista)} / ${pct(s.margem_pessimista)}`;
+    side.appendChild(m);
+    if(s._pend){const pe=document.createElement("span");pe.className="pend";pe.textContent="aguardando envio";side.appendChild(pe);}
+    const x=document.createElement("button");x.className="x";x.type="button";x.setAttribute("aria-label","Remover "+s.nome);x.textContent="✕";
+    x.addEventListener("click",()=>removeItem(s));
+    side.appendChild(x);
+    row.append(body,side);box.appendChild(row);
+  });
+}
+
+async function removeItem(s){
+  if(!confirm(`Remover “${s.nome}” da lista?`))return;
+  setPending(pending().filter(p=>p.id!==s.id));
+  if(!s._pend&&sb&&session){
+    const {error}=await sb.from(TABLE).delete().eq("id",s.id);
+    if(error){syncMsg("Não foi possível remover agora. Tente de novo com internet.",true);return;}
+    remote=remote.filter(r=>r.id!==s.id);
+  }
+  renderSaved();
+}
+
+$("f-ficha").addEventListener("submit",async ev=>{
+  ev.preventDefault();
+  if(!session){$("saved-msg").hidden=false;$("saved-msg").className="err";$("saved-msg").textContent="Entre na sua conta (no topo da página) para salvar.";window.scrollTo({top:0,behavior:"smooth"});return;}
+  const r=lastCalc||calc();
+  const rec={
+    id:uuid(),
+    created_at:new Date().toISOString(),
+    nome:$("nome").value.trim()||"Produto sem nome",
+    fornecedor:$("forn").value.trim()||null, estande:$("estande").value.trim()||null, contato:$("contato").value.trim()||null,
+    busca:market?market.q:($("q").value.trim()||null),
+    preco_usd:fin(r.p.usd), cambio:fin(r.p.fx), preco_venda:fin(r.p.sale),
+    imposto_pct:fin(r.p.tax*100), comissao_pct:fin(r.p.com*100), margem_alvo_pct:fin(r.p.tgt*100),
+    fator_otimista:fin(r.p.mo), fator_pessimista:fin(r.p.mp), custos_extras:fin(r.p.oth),
+    lucro_otimista:fin(r.o.profit), lucro_pessimista:fin(r.pe.profit),
+    margem_otimista:fin(r.o.margin), margem_pessimista:fin(r.pe.margin),
+    classificacao:classOf(r),
+    anuncio_titulo:selected?selected.title:null, anuncio_url:selected?selected.meliUrl:null, imagem_url:selected?selected.imageUrl:null,
+    vendas_mes:selected?fin(selected.sales1m):null, vendedores:selected&&selected.sellerCount!=null?Math.round(selected.sellerCount):null
+  };
+  $("b-save").disabled=true;
+  setPending([rec,...pending()]);
+  renderSaved();
+  const {error}=await sb.from(TABLE).insert(rec);
+  $("b-save").disabled=false;
+  const msg=$("saved-msg"); msg.hidden=false;
+  if(error){
+    msg.className="ok"; msg.textContent=`“${rec.nome}” guardado neste aparelho — sobe para a nuvem quando a internet voltar.`;
+  }else{
+    setPending(pending().filter(p=>p.id!==rec.id));
+    remote=[rec,...remote];
+    msg.className="ok"; msg.textContent=`“${rec.nome}” salvo na lista.`;
+  }
+  ["nome","forn","estande","contato"].forEach(id=>$(id).value="");
+  renderSaved();
+});
+
+// ---------- início ----------
+render(); renderListing(); renderSaved();
+if(sb){
+  sb.auth.getSession().then(({data})=>applySession(data.session));
+  sb.auth.onAuthStateChange((evt,s)=>{if(evt==="SIGNED_IN"||evt==="SIGNED_OUT")applySession(s);});
+}else{
+  $("p-login").hidden=false;
+  setLoginMsg("Não foi possível carregar o Supabase. Verifique a internet e recarregue a página.",true);
+}
+</script>
+</body>
+</html>
