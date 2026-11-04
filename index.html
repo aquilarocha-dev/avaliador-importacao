@@ -58,6 +58,10 @@ button:disabled{opacity:.55;cursor:default}
 .status{font-size:.88rem;color:var(--muted)}
 .status.err,.err{color:var(--bad)}
 .ok{font-size:.85rem;color:var(--good);margin:0}
+.jp{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:.85rem;color:var(--muted);background:var(--soft);border-radius:7px;padding:8px 10px}
+.jp button{padding:7px 12px;font-size:.85rem}
+.jp.on{color:var(--good)}
+.jp.on button{background:none;border:none;color:var(--muted);font-weight:500;text-decoration:underline;padding:4px}
 .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .stat{background:var(--soft);border-radius:7px;padding:8px 10px}
 .stat b{display:block;font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-size:1rem}
@@ -146,7 +150,11 @@ td.good{color:var(--good)} td.bad{color:var(--bad)}
       <input id="q" type="search" placeholder="Ex.: garrafa térmica infantil" autocomplete="off" aria-label="Nome do produto">
       <button class="primary" id="b-busca" type="submit">Buscar</button>
     </form>
-    <div class="status" id="st">Busca os 20 produtos com mais faturamento no último mês que tenham essas palavras no título. A busca usa o JoomPulse e só funciona com a página aberta dentro do Claude; fora dele, informe o preço de venda manualmente.</div>
+    <div class="status" id="st">Busca os 20 produtos com mais faturamento no último mês que tenham essas palavras no título, usando sua conta do JoomPulse.</div>
+    <div class="jp" id="jp" hidden>
+      <span id="jp-st"></span>
+      <button type="button" id="b-jp">Conectar JoomPulse</button>
+    </div>
     <div class="stats" id="stats" hidden></div>
     <div class="list" id="list" hidden></div>
   </section>
@@ -328,21 +336,84 @@ $("f-busca").addEventListener("submit",async ev=>{
   const q=$("q").value.trim(); if(!q)return;
   $("b-busca").disabled=true; $("st").className="status"; $("st").textContent="Buscando no Mercado Livre…";
   await mcpReady;
-  if(!mcp){
+  const toRows=pl=>{const cols=(pl&&pl.columns)||[], data=(pl&&pl.data)||[];return data.map(d=>Object.fromEntries(cols.map((c,i)=>[c,d[i]])));};
+  if(mcp){
+    // aberto dentro do Claude: usa o conector do próprio Claude
+    try{
+      const res=await mcp.callTool("JoomPulse","meli_search_products",{country:"BR",queries:[q],group:"product",sort_by:"revenue1m",limit:20,preset:"full_info"},{cache:{staleTime:600000,gcTime:3600000}});
+      showResults(q,toRows(res.payload||{}));
+    }catch(e){$("st").className="status err";$("st").textContent=errMsg(e);}
+    $("b-busca").disabled=false;return;
+  }
+  // fora do Claude: busca pela Edge Function com a conta JoomPulse do usuário
+  if(!session){
     $("st").className="status err";
-    $("st").textContent="A busca no Mercado Livre só funciona com a página aberta no Claude com o JoomPulse conectado. Aqui, preencha o preço de venda manualmente — o resto funciona normalmente.";
+    $("st").textContent="Entre na sua conta (no topo da página) e conecte o JoomPulse para buscar. Enquanto isso, preencha o preço de venda manualmente.";
     if(!$("nome").value)$("nome").value=q;
     $("b-busca").disabled=false;return;
   }
   try{
-    const res=await mcp.callTool("JoomPulse","meli_search_products",{country:"BR",queries:[q],group:"product",sort_by:"revenue1m",limit:20,preset:"full_info"},{cache:{staleTime:600000,gcTime:3600000}});
-    const pl=res.payload||{};
-    const cols=pl.columns||[], data=pl.data||[];
-    const rows=data.map(d=>Object.fromEntries(cols.map((c,i)=>[c,d[i]])));
-    showResults(q,rows);
-  }catch(e){$("st").className="status err";$("st").textContent=errMsg(e);}
+    const r=await jpCall("search",{q});
+    if(r.needs_connect){
+      setJp(false);
+      $("st").className="status err";
+      $("st").textContent="Conecte sua conta do JoomPulse para buscar (botão logo abaixo).";
+    }else if(r.error){
+      $("st").className="status err";
+      $("st").textContent="A busca falhou: "+String(r.error).slice(0,200);
+    }else{
+      setJp(true);
+      showResults(q,toRows(r));
+    }
+  }catch(e){
+    $("st").className="status err";
+    $("st").textContent="Não foi possível buscar agora. Verifique a internet; a calculadora continua funcionando.";
+  }
   $("b-busca").disabled=false;
 });
+
+// ---------- conexão JoomPulse (OAuth via Edge Function) ----------
+const JP_FN=SUPABASE_URL+"/functions/v1/joompulse-oauth/";
+async function jpCall(route,body){
+  const r=await fetch(JP_FN+route,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPABASE_KEY,"Authorization":"Bearer "+session.access_token},body:JSON.stringify(body||{})});
+  const data=await r.json().catch(()=>({error:"resposta inválida ("+r.status+")"}));
+  return data;
+}
+let jpConnected=false;
+function setJp(on){
+  jpConnected=on;
+  const box=$("jp"); box.hidden=!!mcp||!session; box.className="jp"+(on?" on":"");
+  $("jp-st").textContent=on?"✓ JoomPulse conectado":"JoomPulse não conectado neste login.";
+  $("b-jp").textContent=on?"desconectar":"Conectar JoomPulse";
+}
+async function refreshJp(){
+  await mcpReady;
+  if(mcp||!session){$("jp").hidden=true;return;}
+  try{const r=await jpCall("status");setJp(!!r.connected);}catch(e){setJp(false);}
+}
+$("b-jp").addEventListener("click",async()=>{
+  if(!session)return;
+  const b=$("b-jp"); b.disabled=true;
+  try{
+    if(jpConnected){
+      if(!confirm("Desconectar sua conta do JoomPulse deste app?")){b.disabled=false;return;}
+      await jpCall("disconnect"); setJp(false);
+    }else{
+      $("jp-st").textContent="Abrindo o JoomPulse…";
+      const r=await jpCall("start",{returnTo:location.origin+location.pathname});
+      if(r.url){location.href=r.url;return;}
+      $("jp-st").textContent="Não foi possível iniciar a conexão: "+String(r.error||"erro").slice(0,160);
+    }
+  }catch(e){$("jp-st").textContent="Sem internet agora. Tente de novo.";}
+  b.disabled=false;
+});
+(function(){
+  const u=new URL(location.href), v=u.searchParams.get("joompulse");
+  if(!v)return;
+  u.searchParams.delete("joompulse"); history.replaceState(null,"",u.pathname+u.search+u.hash);
+  $("st").className=v==="ok"?"status":"status err";
+  $("st").textContent=v==="ok"?"JoomPulse conectado. Digite o produto e toque em Buscar.":"A conexão com o JoomPulse não foi concluída. Toque em Conectar JoomPulse para tentar de novo.";
+})();
 
 function median(a){if(!a.length)return null;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2}
 
@@ -426,6 +497,7 @@ function applySession(s){
   $("who").hidden=!s;
   $("who-email").textContent=s?s.user.email:"";
   if(s){flushPending().then(loadRemote);} else {remote=[];renderSaved();}
+  refreshJp();
 }
 
 // ---------- avaliações: Supabase + fila offline ----------
@@ -541,7 +613,10 @@ $("f-ficha").addEventListener("submit",async ev=>{
 render(); renderListing(); renderSaved();
 if(sb){
   sb.auth.getSession().then(({data})=>applySession(data.session));
-  sb.auth.onAuthStateChange((evt,s)=>{if(evt==="SIGNED_IN"||evt==="SIGNED_OUT")applySession(s);});
+  sb.auth.onAuthStateChange((evt,s)=>{
+    if(evt==="SIGNED_OUT"||(evt==="SIGNED_IN"&&(!session||session.user.id!==s.user.id)))applySession(s);
+    else if(s)session=s; // mantém o token atualizado após renovação
+  });
 }else{
   $("p-login").hidden=false;
   setLoginMsg("Não foi possível carregar o Supabase. Verifique a internet e recarregue a página.",true);
